@@ -7,8 +7,11 @@ const getSaturdayType = (date, saturdayRule) => {
   if (saturdayRule !== "alternate_holiday_half") return null;
 
   const dayOfMonth = date.getDate();
-  const whichSaturday = Math.ceil(dayOfMonth / 7);
+  const whichSaturday = Math.ceil(dayOfMonth / 7); // 1st, 2nd, 3rd, 4th, or 5th Saturday
 
+  // 1st and 3rd Saturday = OFF (Holiday)
+  // 2nd and 4th Saturday = HALF DAY
+  // 5th Saturday = FULL DAY (default)
   if (whichSaturday === 1 || whichSaturday === 3) return "OFF";
   if (whichSaturday === 2 || whichSaturday === 4) return "HALF_DAY";
   return "FULL_DAY";
@@ -40,15 +43,32 @@ const getWorkingDaysInMonth = async (year, month) => {
     const dayOfWeek = date.getDay();
     const weeklyOffDays = policy.attendanceRules?.weeklyOffDays || [0];
 
+    // Handle Sunday (0 = Sunday)
+    if (dayOfWeek === 0) {
+      return weeklyOffDays.includes(0);
+    }
+
+    // Handle Saturday (6 = Saturday)
     if (dayOfWeek === 6) {
       const saturdayRule = policy.attendanceRules?.saturdayRule || "half_day";
+
+      // For alternate_holiday_half rule
       if (saturdayRule === "alternate_holiday_half") {
         const saturdayType = getSaturdayType(date, saturdayRule);
+        // OFF means no working day, HALF_DAY and FULL_DAY are working (partial or full)
         return saturdayType === "OFF";
       }
-      return saturdayRule === "off";
+
+      // For "off" rule - Saturday is completely off
+      if (saturdayRule === "off") {
+        return true;
+      }
+
+      // For "half_day" and "full_day" - Saturday is working (will be counted below)
+      return false;
     }
-    return weeklyOffDays.includes(dayOfWeek);
+
+    return false;
   };
 
   let workingDays = 0;
@@ -56,9 +76,49 @@ const getWorkingDaysInMonth = async (year, month) => {
 
   while (current <= endDate) {
     const dateStr = current.toISOString().split("T")[0];
-    if (!isHoliday(dateStr) && !isWeekend(dateStr)) {
-      workingDays++;
+    const dayOfWeek = current.getDay();
+
+    // Skip if holiday
+    if (isHoliday(dateStr)) {
+      current.setDate(current.getDate() + 1);
+      continue;
     }
+
+    // Skip if weekend (Sunday or Saturday with "off" rule)
+    if (isWeekend(dateStr)) {
+      current.setDate(current.getDate() + 1);
+      continue;
+    }
+
+    // Handle Saturday with half day rule
+    if (dayOfWeek === 6) {
+      const saturdayRule = policy.attendanceRules?.saturdayRule || "half_day";
+
+      // For alternate_holiday_half - check if it's HALF_DAY
+      if (saturdayRule === "alternate_holiday_half") {
+        const saturdayType = getSaturdayType(current, saturdayRule);
+        if (saturdayType === "HALF_DAY") {
+          workingDays += 0.5;
+          current.setDate(current.getDate() + 1);
+          continue;
+        }
+        if (saturdayType === "FULL_DAY") {
+          workingDays += 1;
+          current.setDate(current.getDate() + 1);
+          continue;
+        }
+      }
+
+      // For half_day rule
+      if (saturdayRule === "half_day") {
+        workingDays += 0.5;
+        current.setDate(current.getDate() + 1);
+        continue;
+      }
+    }
+
+    // Normal working day (Monday to Friday, or Saturday with full_day rule)
+    workingDays++;
     current.setDate(current.getDate() + 1);
   }
 
@@ -66,7 +126,7 @@ const getWorkingDaysInMonth = async (year, month) => {
 };
 
 // ========== GET ATTENDANCE SUMMARY FOR MONTH ==========
-const getAttendanceSummary = async (employeeId, year, month) => {
+const getAttendanceSummary = async (employeeId, year, month, totalWorkingDays) => {
   const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
   const endDate = `${year}-${String(month).padStart(2, "0")}-31`;
 
@@ -74,7 +134,7 @@ const getAttendanceSummary = async (employeeId, year, month) => {
 
   if (!attendance) {
     return {
-      totalWorkingDays: 0,
+      totalWorkingDays: totalWorkingDays,
       presentDays: 0,
       onTimeDays: 0,
       lateDays: 0,
@@ -89,7 +149,7 @@ const getAttendanceSummary = async (employeeId, year, month) => {
   });
 
   return {
-    totalWorkingDays: monthRecords.length,
+    totalWorkingDays: totalWorkingDays,
     presentDays: monthRecords.filter(r => r.checkInTime).length,
     onTimeDays: monthRecords.filter(r => r.status === "ON_TIME").length,
     lateDays: monthRecords.filter(r => r.status === "LATE").length,
@@ -114,6 +174,7 @@ const getUnpaidLeaveDays = async (employeeId, year, month) => {
   let unpaidDays = 0;
 
   for (const leave of leaves) {
+    // Check if leave contains LOP (Unpaid Leave)
     const hasLOP = leave.leaveTypeSummary.some(l => l.leaveType === "LOP");
     if (hasLOP) {
       const lopDays = leave.leaveTypeSummary.find(l => l.leaveType === "LOP");
@@ -151,7 +212,7 @@ const calculateSalary = async (employeeId, employeeName, basicSalary, year, mont
       componentsToUse = allComponents.filter(c => c.isActive !== false);
     }
 
-    // Get working days in month
+    // Get working days in month (from Policy - based on holidays and weekends)
     const totalWorkingDays = await getWorkingDaysInMonth(year, month);
 
     if (totalWorkingDays === 0) {
@@ -164,8 +225,8 @@ const calculateSalary = async (employeeId, employeeName, basicSalary, year, mont
     // Calculate daily salary
     const dailySalary = basicSalary / totalWorkingDays;
 
-    // Get attendance summary
-    const attendanceSummary = await getAttendanceSummary(employeeId, year, month);
+    // Get attendance summary (PASS totalWorkingDays as parameter)
+    const attendanceSummary = await getAttendanceSummary(employeeId, year, month, totalWorkingDays);
 
     // Get unpaid leave days
     const unpaidLeaveDays = await getUnpaidLeaveDays(employeeId, year, month);
