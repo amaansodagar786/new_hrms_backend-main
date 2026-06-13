@@ -12,7 +12,7 @@ const getSaturdayType = (date, saturdayRule) => {
   // 1st and 3rd Saturday = OFF (Holiday)
   // 2nd and 4th Saturday = HALF DAY
   // 5th Saturday = FULL DAY (default)
-  if (whichSaturday === 1 || whichSaturday === 3) return "OFF";
+  if (whichSaturday === 1 || whichSaturday === 3 || whichSaturday === 5) return "OFF";
   if (whichSaturday === 2 || whichSaturday === 4) return "HALF_DAY";
   return "FULL_DAY";
 };
