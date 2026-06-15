@@ -737,4 +737,62 @@ router.patch("/employees/:employeeId/toggle-status", protectHRorAdmin, async (re
   }
 });
 
+
+// ========== RESET EMPLOYEE PASSWORD (Admin/HR only) ==========
+router.put("/employees/:employeeId/reset-password", protectHRorAdmin, async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const { newPassword } = req.body;
+    const updatedBy = req.user.name || (req.user.role === "ADMIN" ? "Admin" : "HR");
+
+    // Validation
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters long"
+      });
+    }
+
+    // Find employee
+    const employee = await User.findOne({ employeeId });
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found"
+      });
+    }
+
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    // Update password
+    employee.password = hashedPassword;
+    await employee.save();
+
+    // Send email notification (without password)
+    try {
+      const { sendPasswordResetNotification } = require("../../utils/emailService");
+      await sendPasswordResetNotification(employee, updatedBy);
+      console.log(`Password reset notification sent to ${employee.email}`);
+    } catch (emailError) {
+      console.error("Failed to send password reset email:", emailError);
+      // Don't fail the request if email fails
+    }
+
+    res.json({
+      success: true,
+      message: `Password reset successfully for ${employee.name}. Email notification sent.`
+    });
+
+  } catch (error) {
+    console.error("Reset password error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
+    });
+  }
+});
+
 module.exports = router;
