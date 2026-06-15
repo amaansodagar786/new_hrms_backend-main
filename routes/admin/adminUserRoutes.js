@@ -149,6 +149,15 @@ router.post("/users/create", protectAdmin, async (req, res) => {
       designation: designation || "",
       phone: phone || "",
       address: address || "",
+      // New fields - initially empty
+      panNumber: "",
+      aadharNumber: "",
+      bankAccountNo: "",
+      bankIfsc: "",
+      bankName: "",
+      accountHolderName: "",
+      bloodGroup: "",
+      joinLetter: "",
     });
 
     await user.save();
@@ -164,8 +173,6 @@ router.post("/users/create", protectAdmin, async (req, res) => {
       console.log(`Welcome email sent to ${email}`);
     } catch (emailError) {
       console.error("Failed to send welcome email:", emailError);
-      // Don't fail the user creation if email fails
-      // Just log the error
     }
 
     res.status(201).json({
@@ -589,13 +596,16 @@ router.get("/employees/:employeeId", protectHRorAdmin, async (req, res) => {
   }
 });
 
-// ========== UPDATE EMPLOYEE (Admin/HR only) ==========
+// ========== UPDATE EMPLOYEE (Admin/HR only) - WITH NEW FIELDS ==========
 router.put("/employees/:employeeId", protectHRorAdmin, async (req, res) => {
   try {
     const { employeeId } = req.params;
     const {
       phone, address, department, designation,
-      managerId, isActive, salary
+      managerId, isActive, salary,
+      // NEW FIELDS
+      panNumber, aadharNumber, bankAccountNo, bankIfsc,
+      bankName, accountHolderName, bloodGroup, joinLetter
     } = req.body;
 
     const employee = await User.findOne({ employeeId });
@@ -608,11 +618,23 @@ router.put("/employees/:employeeId", protectHRorAdmin, async (req, res) => {
 
     // Build update object
     const updateFields = {};
+
+    // Existing fields
     if (phone !== undefined) updateFields.phone = phone;
     if (address !== undefined) updateFields.address = address;
     if (department !== undefined) updateFields.department = department;
     if (designation !== undefined) updateFields.designation = designation;
     if (isActive !== undefined) updateFields.isActive = isActive;
+
+    // NEW FIELDS
+    if (panNumber !== undefined) updateFields.panNumber = panNumber;
+    if (aadharNumber !== undefined) updateFields.aadharNumber = aadharNumber;
+    if (bankAccountNo !== undefined) updateFields.bankAccountNo = bankAccountNo;
+    if (bankIfsc !== undefined) updateFields.bankIfsc = bankIfsc;
+    if (bankName !== undefined) updateFields.bankName = bankName;
+    if (accountHolderName !== undefined) updateFields.accountHolderName = accountHolderName;
+    if (bloodGroup !== undefined) updateFields.bloodGroup = bloodGroup;
+    if (joinLetter !== undefined) updateFields.joinLetter = joinLetter;
 
     // Only Admin can update salary
     if (req.userType === "ADMIN" && salary !== undefined) {

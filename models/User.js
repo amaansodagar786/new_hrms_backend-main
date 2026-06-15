@@ -69,6 +69,49 @@ const UserSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+
+    // ========== NEW FIELDS (Added) ==========
+    panNumber: {
+      type: String,
+      default: "",
+      trim: true,
+      uppercase: true,
+    },
+    aadharNumber: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    bankAccountNo: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    bankIfsc: {
+      type: String,
+      default: "",
+      trim: true,
+      uppercase: true,
+    },
+    bankName: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    accountHolderName: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    bloodGroup: {
+      type: String,
+      enum: ["", "A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"],
+      default: "",
+    },
+    joinLetter: {
+      type: String,
+      default: "",
+    },
   },
   {
     timestamps: true,

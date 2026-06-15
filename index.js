@@ -3,6 +3,8 @@ const cookieParser = require("cookie-parser");
 const cors = require("cors");
 const connectDB = require("./config/mongodb");
 require("dotenv").config();
+const path = require("path");
+
 
 // Import scheduler
 const { startAttendanceScheduler } = require("./utils/attendanceScheduler");
@@ -65,6 +67,14 @@ app.use("/manager/dashboard", managerDashboardRoutes);
 app.use("/employee/dashboard", employeeDashboardRoutes);
 
 
+
+const uploadRoutes = require("./routes/upload/uploadRoutes");
+
+// Serve static files from uploads directory
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
+// Register upload routes
+app.use("/upload", uploadRoutes);
 
 // Test route
 app.get("/", (req, res) => {
