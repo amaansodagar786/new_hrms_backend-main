@@ -83,17 +83,29 @@ const isWeekend = (dateStr, policy) => {
     return weeklyOffDays.includes(dayOfWeek);
 };
 
-// ========== HELPER: Calculate working days excluding holidays/weekends ==========
-const calculateWorkingDays = (fromDate, toDate, policy) => {
+// ========== HELPER: Calculate working days excluding holidays/weekends (UPDATED for half-day) ==========
+const calculateWorkingDays = (fromDate, toDate, daysArray, policy) => {
     const start = new Date(fromDate);
     const end = new Date(toDate);
     let workingDays = 0;
     const current = new Date(start);
 
+    // Create map for half-day info
+    const halfDayMap = new Map();
+    for (const day of daysArray) {
+        if (day.isHalfDay) {
+            halfDayMap.set(day.date, true);
+        }
+    }
+
     while (current <= end) {
         const dateStr = current.toISOString().split("T")[0];
         if (!isHoliday(dateStr, policy) && !isWeekend(dateStr, policy)) {
-            workingDays++;
+            if (halfDayMap.has(dateStr)) {
+                workingDays += 0.5;  // Half day
+            } else {
+                workingDays += 1;     // Full day
+            }
         }
         current.setDate(current.getDate() + 1);
     }
@@ -125,13 +137,24 @@ const getOrCreateLeaveBalance = async (employeeId, employeeName, year = new Date
     return balance;
 };
 
-// ========== HELPER: Update leave balance after approval ==========
+// ========== HELPER: Update leave balance after approval (UPDATED for half-day & unpaid leaves) ==========
 const updateLeaveBalance = async (employeeId, leaveTypeSummary, isAdding = false) => {
     const year = new Date().getFullYear();
     const balance = await LeaveBalance.findOne({ employeeId, year });
     if (!balance) return null;
 
+    // Get policy to know which leave types are unpaid
+    const policy = await Policy.findOne({ isActive: true });
+
     for (const summary of leaveTypeSummary) {
+        // Find if this leave type is unpaid
+        const policyLeaveType = policy?.leaveTypes?.find(lt => lt.code === summary.leaveType);
+
+        // SKIP balance update for unpaid leaves (LOP)
+        if (policyLeaveType?.isUnpaid === true) {
+            continue;
+        }
+
         const balanceIndex = balance.balances.findIndex(b => b.leaveType === summary.leaveType);
         if (balanceIndex !== -1) {
             if (isAdding) {
@@ -148,17 +171,16 @@ const updateLeaveBalance = async (employeeId, leaveTypeSummary, isAdding = false
     return balance;
 };
 
-// ========== HELPER: Check who can approve based on role ==========
 const getApproverRole = (applicantRole) => {
     switch (applicantRole) {
-        case "EMPLOYEE": return "MANAGER";
+        case "EMPLOYEE": return ["MANAGER", "HR"];  // Both can approve
         case "MANAGER": return "HR";
         case "HR": return "ADMIN";
         default: return "ADMIN";
     }
 };
 
-// ========== APPLY FOR LEAVE ==========
+// ========== APPLY FOR LEAVE (UPDATED for half-day) ==========
 router.post("/apply", async (req, res) => {
     try {
         const employeeId = req.user.employeeId;
@@ -181,7 +203,8 @@ router.post("/apply", async (req, res) => {
             });
         }
 
-        const totalDays = calculateWorkingDays(fromDate, toDate, policy);
+        // UPDATED: Pass days array to calculateWorkingDays
+        const totalDays = calculateWorkingDays(fromDate, toDate, days, policy);
 
         if (totalDays === 0) {
             return res.status(400).json({
@@ -223,6 +246,7 @@ router.post("/apply", async (req, res) => {
         let hasError = false;
         let errorMessage = "";
 
+        // UPDATED: Calculate with half-day support (0.5 for half-day, 1 for full day)
         const leaveTypeMap = new Map();
         for (const day of days) {
             const lt = policyLeaveTypes.find(p => p.code === day.leaveType);
@@ -236,7 +260,8 @@ router.post("/apply", async (req, res) => {
                 errorMessage = `${day.leaveType} is not applicable for ${role}`;
                 break;
             }
-            leaveTypeMap.set(day.leaveType, (leaveTypeMap.get(day.leaveType) || 0) + 1);
+            const dayValue = day.isHalfDay ? 0.5 : 1;
+            leaveTypeMap.set(day.leaveType, (leaveTypeMap.get(day.leaveType) || 0) + dayValue);
         }
 
         if (hasError) {
@@ -255,6 +280,7 @@ router.post("/apply", async (req, res) => {
                 break;
             }
 
+            // Only check balance for paid leaves (not unpaid)
             if (!policyLt.isUnpaid && balanceLt && count > balanceLt.remaining) {
                 hasError = true;
                 errorMessage = `Insufficient ${leaveType} balance. Available: ${balanceLt.remaining}, Requested: ${count}`;
@@ -554,15 +580,26 @@ router.put("/:id/approve", async (req, res) => {
         if (approverRole === "ADMIN") {
             hasPermission = true;
         }
-        else if (requiredApproverRole === "MANAGER" && approverRole === "MANAGER") {
-            const employee = await User.findOne({ employeeId: leave.employeeId });
-            if (employee && employee.managerId === approverId) {
-                hasPermission = true;
+        // For EMPLOYEE leave: MANAGER or HR can approve
+        else if (Array.isArray(requiredApproverRole)) {
+            if (requiredApproverRole.includes(approverRole)) {
+                if (approverRole === "MANAGER") {
+                    // Check if this employee reports to this manager
+                    const employee = await User.findOne({ employeeId: leave.employeeId });
+                    if (employee && employee.managerId === approverId) {
+                        hasPermission = true;
+                    }
+                } else if (approverRole === "HR") {
+                    // HR can approve any employee leave
+                    hasPermission = true;
+                }
             }
         }
+        // For MANAGER leave: Only HR can approve
         else if (requiredApproverRole === "HR" && approverRole === "HR") {
             hasPermission = true;
         }
+        // For HR leave: Only ADMIN can approve (handled by ADMIN check above)
 
         if (!hasPermission) {
             return res.status(403).json({
@@ -576,7 +613,7 @@ router.put("/:id/approve", async (req, res) => {
         leave.status = "APPROVED";
         leave.approvedBy = approverId;
         leave.approvedByName = approverName;
-        leave.approvedByRole = requiredApproverRole;
+        leave.approvedByRole = Array.isArray(requiredApproverRole) ? approverRole : requiredApproverRole;
         leave.approvedAt = new Date();
         await leave.save();
 
@@ -605,6 +642,7 @@ router.put("/:id/approve", async (req, res) => {
     }
 });
 
+// ========== REJECT LEAVE ==========
 router.put("/:id/reject", async (req, res) => {
     try {
         console.log("=== REJECT ROUTE ===");
@@ -646,15 +684,26 @@ router.put("/:id/reject", async (req, res) => {
         if (approverRole === "ADMIN") {
             hasPermission = true;
         }
-        else if (requiredApproverRole === "MANAGER" && approverRole === "MANAGER") {
-            const employee = await User.findOne({ employeeId: leave.employeeId });
-            if (employee && employee.managerId === approverId) {
-                hasPermission = true;
+        // For EMPLOYEE leave: MANAGER or HR can reject
+        else if (Array.isArray(requiredApproverRole)) {
+            if (requiredApproverRole.includes(approverRole)) {
+                if (approverRole === "MANAGER") {
+                    // Check if this employee reports to this manager
+                    const employee = await User.findOne({ employeeId: leave.employeeId });
+                    if (employee && employee.managerId === approverId) {
+                        hasPermission = true;
+                    }
+                } else if (approverRole === "HR") {
+                    // HR can reject any employee leave
+                    hasPermission = true;
+                }
             }
         }
+        // For MANAGER leave: Only HR can reject
         else if (requiredApproverRole === "HR" && approverRole === "HR") {
             hasPermission = true;
         }
+        // For HR leave: Only ADMIN can reject (handled by ADMIN check above)
 
         if (!hasPermission) {
             return res.status(403).json({
@@ -667,7 +716,7 @@ router.put("/:id/reject", async (req, res) => {
         leave.rejectionReason = rejectionReason;
         leave.approvedBy = approverId;
         leave.approvedByName = approverName;
-        leave.approvedByRole = requiredApproverRole;
+        leave.approvedByRole = Array.isArray(requiredApproverRole) ? approverRole : requiredApproverRole;
         leave.approvedAt = new Date();
         await leave.save();
 
@@ -805,8 +854,6 @@ router.get("/:id", async (req, res) => {
     }
 });
 
-
-
 // ========== GET LEAVE USAGE FOR A SPECIFIC MONTH ==========
 router.get("/usage/:year/:month", async (req, res) => {
     try {
@@ -885,9 +932,5 @@ router.get("/usage/:year/:month", async (req, res) => {
         });
     }
 });
-
-
-
-
 
 module.exports = router;
