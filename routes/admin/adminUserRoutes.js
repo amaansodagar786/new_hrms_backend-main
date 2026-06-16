@@ -2,6 +2,11 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const { v4: uuidv4 } = require("uuid");
 const User = require("../../models/User");
+const Attendance = require("../../models/Attendance/Attendance");
+const Leave = require("../../models/Leave/Leave");
+const LeaveBalance = require("../../models/Leave/LeaveBalance");
+const Salary = require("../../models/Salary/Salary");
+const Performance = require("../../models/Task/Performance");
 const { protectAdmin } = require("../../middleware/authMiddleware");
 const { sendWelcomeEmail } = require("../../utils/emailService");
 
@@ -74,6 +79,87 @@ const updateManagerAssignedEmployees = async (managerId, employeeId, employeeNam
   }
 };
 
+// ========== HELPER: Get attendance with filters (for complete details) ==========
+const getAttendanceWithFilters = async (employeeId, year, month) => {
+  const attendance = await Attendance.findOne({ employeeId }).lean();
+  if (!attendance) return { records: [], total: 0 };
+
+  let records = attendance.records || [];
+
+  if (year) {
+    records = records.filter(r => r.date && r.date.startsWith(year));
+    if (month) {
+      const monthStr = String(month).padStart(2, '0');
+      records = records.filter(r => r.date && r.date.startsWith(`${year}-${monthStr}`));
+    }
+  } else {
+    // Default: last 6 months
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    const dateLimit = sixMonthsAgo.toISOString().split('T')[0];
+    records = records.filter(r => r.date && r.date >= dateLimit);
+  }
+
+  records.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+  return {
+    records,
+    total: records.length
+  };
+};
+
+// ========== HELPER: Get leave history with filters ==========
+const getLeaveHistory = async (employeeId, year, status, limit = 50) => {
+  const filter = { employeeId };
+  if (year) filter.fromDate = { $regex: `^${year}` };
+  if (status) filter.status = status;
+
+  const leaves = await Leave.find(filter)
+    .sort({ appliedOn: -1 })
+    .limit(limit)
+    .lean();
+
+  return leaves;
+};
+
+// ========== HELPER: Get salary records with filters ==========
+const getSalaryRecords = async (employeeId, year, month) => {
+  const salary = await Salary.findOne({ employeeId }).lean();
+  if (!salary) return { records: [], total: 0 };
+
+  let records = salary.records || [];
+
+  if (year) {
+    records = records.filter(r => r.year === parseInt(year));
+    if (month) {
+      const monthStr = String(month).padStart(2, '0');
+      records = records.filter(r => r.month === `${year}-${monthStr}`);
+    }
+  } else {
+    // Default: last 6 months
+    records = records.slice(-6);
+  }
+
+  records.sort((a, b) => (b.month || '').localeCompare(a.month || ''));
+
+  return {
+    records,
+    total: records.length
+  };
+};
+
+// ========== HELPER: Get performance reviews ==========
+const getPerformanceReviews = async (employeeId, limit = 10) => {
+  const performance = await Performance.findOne({ employeeId }).lean();
+  if (!performance) return { reviews: [], total: 0 };
+
+  const reviews = (performance.reviews || [])
+    .sort((a, b) => (b.reviewMonth || '').localeCompare(a.reviewMonth || ''))
+    .slice(0, parseInt(limit));
+
+  return { reviews, total: performance.reviews.length };
+};
+
 // ========== CREATE USER (HR, MANAGER, EMPLOYEE) - Admin only ==========
 router.post("/users/create", protectAdmin, async (req, res) => {
   try {
@@ -82,7 +168,6 @@ router.post("/users/create", protectAdmin, async (req, res) => {
       department, designation, phone, address
     } = req.body;
 
-    // Validation
     if (!name || !email || !password || !role || !salary) {
       return res.status(400).json({
         success: false,
@@ -149,7 +234,6 @@ router.post("/users/create", protectAdmin, async (req, res) => {
       designation: designation || "",
       phone: phone || "",
       address: address || "",
-      // New fields - initially empty
       panNumber: "",
       aadharNumber: "",
       bankAccountNo: "",
@@ -162,12 +246,10 @@ router.post("/users/create", protectAdmin, async (req, res) => {
 
     await user.save();
 
-    // If employee is created, add to manager's assignedEmployees array
     if (role === "EMPLOYEE" && managerId) {
       await updateManagerAssignedEmployees(managerId, employeeId, name, true);
     }
 
-    // ========== SEND WELCOME EMAIL ==========
     try {
       await sendWelcomeEmail(user, password);
       console.log(`Welcome email sent to ${email}`);
@@ -287,12 +369,10 @@ router.put("/users/:employeeId", protectAdmin, async (req, res) => {
       });
     }
 
-    // If updating manager for EMPLOYEE
     if (user.role === "EMPLOYEE" && managerId !== undefined && managerId !== user.managerId) {
       const oldManagerId = user.managerId;
       const newManagerId = managerId;
 
-      // Validate new manager exists if provided
       if (newManagerId) {
         const newManager = await User.findOne({
           employeeId: newManagerId,
@@ -306,18 +386,15 @@ router.put("/users/:employeeId", protectAdmin, async (req, res) => {
         }
       }
 
-      // Remove from old manager's assignedEmployees
       if (oldManagerId) {
         await updateManagerAssignedEmployees(oldManagerId, employeeId, null, false);
       }
 
-      // Add to new manager's assignedEmployees
       if (newManagerId) {
         await updateManagerAssignedEmployees(newManagerId, employeeId, user.name, true);
       }
     }
 
-    // Update fields
     const updateFields = {};
     if (name) updateFields.name = name;
     if (salary) updateFields.salary = salary;
@@ -362,12 +439,10 @@ router.delete("/users/:employeeId", protectAdmin, async (req, res) => {
       });
     }
 
-    // If user is EMPLOYEE, remove from manager's assignedEmployees
     if (user.role === "EMPLOYEE" && user.managerId) {
       await updateManagerAssignedEmployees(user.managerId, employeeId, null, false);
     }
 
-    // If user is MANAGER, remove all assigned employees' managerId references
     if (user.role === "MANAGER") {
       const assignedEmployees = await User.find({ managerId: employeeId });
       for (const emp of assignedEmployees) {
@@ -432,7 +507,6 @@ router.get("/managers/:managerId/employees", protectHRorAdmin, async (req, res) 
       });
     }
 
-    // Get full employee details for assigned employees
     const employeeIds = manager.assignedEmployees.map(emp => emp.employeeId);
     const employees = await User.find({
       employeeId: { $in: employeeIds },
@@ -465,7 +539,6 @@ router.get("/employees/all", protectHRorAdmin, async (req, res) => {
   try {
     const { role: roleFilter, department, status, search, page = 1, limit = 20 } = req.query;
 
-    // Build filter - get all employees (HR, MANAGER, EMPLOYEE)
     let filter = { role: { $in: ["HR", "MANAGER", "EMPLOYEE"] } };
 
     if (roleFilter && ["HR", "MANAGER", "EMPLOYEE"].includes(roleFilter)) {
@@ -480,7 +553,6 @@ router.get("/employees/all", protectHRorAdmin, async (req, res) => {
       filter.isActive = true;
     }
 
-    // For search
     if (search) {
       filter.$or = [
         { name: { $regex: search, $options: "i" } },
@@ -492,7 +564,6 @@ router.get("/employees/all", protectHRorAdmin, async (req, res) => {
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Get all employees
     const employees = await User.find(filter)
       .select("-password")
       .sort({ name: 1 })
@@ -500,7 +571,6 @@ router.get("/employees/all", protectHRorAdmin, async (req, res) => {
       .limit(parseInt(limit))
       .lean();
 
-    // Get all managers for reference
     const allManagers = await User.find({ role: "MANAGER", isActive: true })
       .select("employeeId name")
       .lean();
@@ -510,7 +580,6 @@ router.get("/employees/all", protectHRorAdmin, async (req, res) => {
       managerMap.set(mgr.employeeId, mgr.name);
     });
 
-    // Add managerName to each employee
     const employeesWithManager = employees.map(emp => ({
       ...emp,
       managerName: emp.managerId ? managerMap.get(emp.managerId) || null : null,
@@ -518,8 +587,6 @@ router.get("/employees/all", protectHRorAdmin, async (req, res) => {
     }));
 
     const total = await User.countDocuments(filter);
-
-    // Get unique departments for filter dropdown
     const departments = await User.distinct("department", { role: { $in: ["HR", "MANAGER", "EMPLOYEE"] } });
 
     res.json({
@@ -562,14 +629,12 @@ router.get("/employees/:employeeId", protectHRorAdmin, async (req, res) => {
       });
     }
 
-    // Get manager name if exists
     let managerName = null;
     if (employee.managerId) {
       const manager = await User.findOne({ employeeId: employee.managerId }).select("name").lean();
       managerName = manager?.name || null;
     }
 
-    // If employee is manager, get assigned employees list
     let assignedEmployeesList = [];
     if (employee.role === "MANAGER" && employee.assignedEmployees?.length > 0) {
       const employeeIds = employee.assignedEmployees.map(emp => emp.employeeId);
@@ -596,14 +661,13 @@ router.get("/employees/:employeeId", protectHRorAdmin, async (req, res) => {
   }
 });
 
-// ========== UPDATE EMPLOYEE (Admin/HR only) - WITH NEW FIELDS ==========
+// ========== UPDATE EMPLOYEE (Admin/HR only) ==========
 router.put("/employees/:employeeId", protectHRorAdmin, async (req, res) => {
   try {
     const { employeeId } = req.params;
     const {
       phone, address, department, designation,
       managerId, isActive, salary,
-      // NEW FIELDS
       panNumber, aadharNumber, bankAccountNo, bankIfsc,
       bankName, accountHolderName, bloodGroup, joinLetter
     } = req.body;
@@ -616,17 +680,14 @@ router.put("/employees/:employeeId", protectHRorAdmin, async (req, res) => {
       });
     }
 
-    // Build update object
     const updateFields = {};
 
-    // Existing fields
     if (phone !== undefined) updateFields.phone = phone;
     if (address !== undefined) updateFields.address = address;
     if (department !== undefined) updateFields.department = department;
     if (designation !== undefined) updateFields.designation = designation;
     if (isActive !== undefined) updateFields.isActive = isActive;
 
-    // NEW FIELDS
     if (panNumber !== undefined) updateFields.panNumber = panNumber;
     if (aadharNumber !== undefined) updateFields.aadharNumber = aadharNumber;
     if (bankAccountNo !== undefined) updateFields.bankAccountNo = bankAccountNo;
@@ -636,19 +697,15 @@ router.put("/employees/:employeeId", protectHRorAdmin, async (req, res) => {
     if (bloodGroup !== undefined) updateFields.bloodGroup = bloodGroup;
     if (joinLetter !== undefined) updateFields.joinLetter = joinLetter;
 
-    // Only Admin can update salary
     if (req.userType === "ADMIN" && salary !== undefined) {
       updateFields.salary = salary;
     }
 
-    // If updating manager for EMPLOYEE
     if (managerId !== undefined && employee.role === "EMPLOYEE") {
       const oldManagerId = employee.managerId;
       const newManagerId = managerId || null;
 
-      // If manager changed, update both sides
       if (oldManagerId !== newManagerId) {
-        // Remove from old manager's assignedEmployees
         if (oldManagerId) {
           await User.findOneAndUpdate(
             { employeeId: oldManagerId },
@@ -656,7 +713,6 @@ router.put("/employees/:employeeId", protectHRorAdmin, async (req, res) => {
           );
         }
 
-        // Add to new manager's assignedEmployees
         if (newManagerId) {
           const newManager = await User.findOne({ employeeId: newManagerId, role: "MANAGER" });
           if (newManager) {
@@ -677,7 +733,6 @@ router.put("/employees/:employeeId", protectHRorAdmin, async (req, res) => {
       { new: true, runValidators: true }
     ).select("-password").lean();
 
-    // Get manager name for response
     let managerName = null;
     if (updatedEmployee.managerId) {
       const manager = await User.findOne({ employeeId: updatedEmployee.managerId }).select("name").lean();
@@ -737,7 +792,6 @@ router.patch("/employees/:employeeId/toggle-status", protectHRorAdmin, async (re
   }
 });
 
-
 // ========== RESET EMPLOYEE PASSWORD (Admin/HR only) ==========
 router.put("/employees/:employeeId/reset-password", protectHRorAdmin, async (req, res) => {
   try {
@@ -745,7 +799,6 @@ router.put("/employees/:employeeId/reset-password", protectHRorAdmin, async (req
     const { newPassword } = req.body;
     const updatedBy = req.user.name || (req.user.role === "ADMIN" ? "Admin" : "HR");
 
-    // Validation
     if (!newPassword || newPassword.length < 6) {
       return res.status(400).json({
         success: false,
@@ -753,7 +806,6 @@ router.put("/employees/:employeeId/reset-password", protectHRorAdmin, async (req
       });
     }
 
-    // Find employee
     const employee = await User.findOne({ employeeId });
     if (!employee) {
       return res.status(404).json({
@@ -762,22 +814,18 @@ router.put("/employees/:employeeId/reset-password", protectHRorAdmin, async (req
       });
     }
 
-    // Hash new password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
 
-    // Update password
     employee.password = hashedPassword;
     await employee.save();
 
-    // Send email notification (without password)
     try {
       const { sendPasswordResetNotification } = require("../../utils/emailService");
       await sendPasswordResetNotification(employee, updatedBy);
       console.log(`Password reset notification sent to ${employee.email}`);
     } catch (emailError) {
       console.error("Failed to send password reset email:", emailError);
-      // Don't fail the request if email fails
     }
 
     res.json({
@@ -787,6 +835,164 @@ router.put("/employees/:employeeId/reset-password", protectHRorAdmin, async (req
 
   } catch (error) {
     console.error("Reset password error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
+    });
+  }
+});
+
+// ============================================================
+// ========== 🆕 NEW: GET COMPLETE EMPLOYEE DETAILS ==========
+// ============================================================
+router.get("/employees/:employeeId/complete-details", protectHRorAdmin, async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const {
+      attendanceYear, attendanceMonth,
+      leaveYear, leaveStatus,
+      salaryYear, salaryMonth,
+      performanceLimit = 10
+    } = req.query;
+
+    // Run all queries in parallel for optimal performance
+    const [
+      employee,
+      attendance,
+      leaveBalance,
+      leaveHistory,
+      salaryRecords,
+      performanceReviews
+    ] = await Promise.all([
+      // 1. Employee Basic Info
+      User.findOne({ employeeId })
+        .select("-password")
+        .lean(),
+
+      // 2. Attendance Records (with filters)
+      getAttendanceWithFilters(employeeId, attendanceYear, attendanceMonth),
+
+      // 3. Leave Balance (current year)
+      LeaveBalance.findOne({
+        employeeId,
+        year: leaveYear || new Date().getFullYear()
+      }).lean(),
+
+      // 4. Leave History (with filters)
+      getLeaveHistory(employeeId, leaveYear, leaveStatus),
+
+      // 5. Salary Records (with filters)
+      getSalaryRecords(employeeId, salaryYear, salaryMonth),
+
+      // 6. Performance Reviews (with limit)
+      getPerformanceReviews(employeeId, performanceLimit)
+    ]);
+
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found"
+      });
+    }
+
+    // Get manager name
+    let managerName = null;
+    if (employee.managerId) {
+      const manager = await User.findOne({ employeeId: employee.managerId })
+        .select("name")
+        .lean();
+      managerName = manager?.name || null;
+    }
+
+    // Prepare leave balance response
+    let leaveBalanceData = null;
+    if (leaveBalance) {
+      const balances = {};
+      for (const b of leaveBalance.balances || []) {
+        balances[b.leaveType] = {
+          total: b.total || 0,
+          used: b.used || 0,
+          remaining: b.remaining || 0
+        };
+      }
+      leaveBalanceData = balances;
+    }
+
+    // Prepare response
+    res.json({
+      success: true,
+      data: {
+        // Basic Info
+        employee: {
+          employeeId: employee.employeeId,
+          name: employee.name,
+          email: employee.email,
+          role: employee.role,
+          department: employee.department,
+          designation: employee.designation,
+          managerId: employee.managerId,
+          managerName: managerName,
+          salary: employee.salary,
+          joinDate: employee.joinDate,
+          phone: employee.phone,
+          address: employee.address,
+          isActive: employee.isActive,
+          panNumber: employee.panNumber,
+          aadharNumber: employee.aadharNumber,
+          bankAccountNo: employee.bankAccountNo,
+          bankIfsc: employee.bankIfsc,
+          bankName: employee.bankName,
+          accountHolderName: employee.accountHolderName,
+          bloodGroup: employee.bloodGroup,
+          joinLetter: employee.joinLetter,
+          profilePicture: employee.profilePicture,
+          assignedEmployeesCount: employee.assignedEmployees?.length || 0,
+          createdAt: employee.createdAt,
+          updatedAt: employee.updatedAt
+        },
+
+        // Attendance Summary & History
+        attendance: {
+          records: attendance.records || [],
+          total: attendance.total || 0,
+          filters: {
+            year: attendanceYear || null,
+            month: attendanceMonth || null
+          }
+        },
+
+        // Leave Management
+        leave: {
+          balance: leaveBalanceData,
+          history: leaveHistory || [],
+          filters: {
+            year: leaveYear || null,
+            status: leaveStatus || null
+          }
+        },
+
+        // Salary Records
+        salary: {
+          records: salaryRecords.records || [],
+          total: salaryRecords.total || 0,
+          basicSalary: employee.salary,
+          filters: {
+            year: salaryYear || null,
+            month: salaryMonth || null
+          }
+        },
+
+        // Performance Reviews
+        performance: {
+          reviews: performanceReviews.reviews || [],
+          total: performanceReviews.total || 0
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error("Get complete employee details error:", error);
     res.status(500).json({
       success: false,
       message: "Server error",
