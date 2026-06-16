@@ -5,6 +5,9 @@ const connectDB = require("./config/mongodb");
 require("dotenv").config();
 const path = require("path");
 
+process.env.TZ = 'Asia/Kolkata';
+
+
 
 // Import scheduler
 const { startAttendanceScheduler } = require("./utils/attendanceScheduler");
