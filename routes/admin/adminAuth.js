@@ -68,6 +68,9 @@ router.post("/login", async (req, res) => {
             return res.status(400).json({ message: "Invalid credentials" });
         }
 
+        // ========== CLEAR EMPLOYEE TOKEN (if exists) ==========
+        res.clearCookie("employeeToken");
+
         // Create JWT token
         const token = jwt.sign(
             { id: admin._id, adminId: admin.adminId, role: "ADMIN" },

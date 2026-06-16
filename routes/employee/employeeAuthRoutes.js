@@ -40,6 +40,9 @@ router.post("/login", async (req, res) => {
             });
         }
 
+        // ========== CLEAR ADMIN TOKEN (if exists) ==========
+        res.clearCookie("adminToken");
+
         const token = jwt.sign(
             {
                 id: user._id,
