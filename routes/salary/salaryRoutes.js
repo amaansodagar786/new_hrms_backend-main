@@ -66,7 +66,7 @@ const isAllowedToProcessSalary = (targetYear, targetMonth) => {
   const lastDayOfTargetMonth = new Date(targetYear, targetMonth, 0).getDate();
 
   if (currentYear === targetYear && currentMonth === targetMonth) {
-    return currentDate >= 26 && currentDate <= lastDayOfTargetMonth;
+    return currentDate >= 15 && currentDate <= lastDayOfTargetMonth;
   }
 
   let nextMonth = targetMonth + 1;
