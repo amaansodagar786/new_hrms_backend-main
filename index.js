@@ -17,11 +17,16 @@ connectDB();
 // Start attendance scheduler (runs daily at 6 PM)
 startAttendanceScheduler();
 
-// CORS Middleware
-app.use(cors({
-    origin: "http://localhost:5173",
-    credentials: true,
-}));
+app.use(
+    cors({
+        origin: [
+            "http://localhost:5173",
+            "https://hrms-system-teal.vercel.app",
+
+        ],
+        credentials: true,
+    })
+);
 
 // Middleware
 app.use(express.json());
