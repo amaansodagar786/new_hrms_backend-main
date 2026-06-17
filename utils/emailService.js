@@ -151,4 +151,67 @@ const sendPasswordResetNotification = async (user, updatedBy) => {
   }
 };
 
-module.exports = { sendWelcomeEmail , sendPasswordResetNotification  };
+
+// ========== SEND PASSWORD CHANGE NOTIFICATION ==========
+const sendPasswordChangeNotification = async (user) => {
+  try {
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+      }
+    });
+
+    const currentDate = new Date().toLocaleString();
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: user.email,
+      subject: `🔐 Password Changed - HRMS`,
+      html: `
+                <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 550px; margin: 0 auto; padding: 20px; background: #F0F2FF; border-radius: 16px;">
+                    <div style="background: linear-gradient(135deg, #5A67F2, #3D4ADB); padding: 24px; border-radius: 16px 16px 0 0; text-align: center;">
+                        <h1 style="color: #fff; margin: 0; font-size: 24px;">🔐 Password Changed</h1>
+                    </div>
+                    
+                    <div style="background: #fff; padding: 28px; border-radius: 0 0 16px 16px;">
+                        <p style="font-size: 16px; color: #0D0F1A; margin-bottom: 20px;">Dear <strong>${user.name}</strong>,</p>
+                        
+                        <div style="background: #F8F9FF; padding: 16px; border-radius: 12px; margin-bottom: 20px;">
+                            <p style="margin: 0 0 8px 0; color: #64748B;">Your password has been changed successfully on:</p>
+                            <p style="margin: 0; font-size: 18px; font-weight: 600; color: #5A67F2;">${currentDate}</p>
+                        </div>
+                        
+                        <div style="background: #FEF2F2; padding: 14px; border-radius: 10px; margin-bottom: 24px; border-left: 4px solid #EF4444;">
+                            <p style="margin: 0; font-size: 14px; color: #DC2626;">
+                                ⚠️ If you did not change your password, please contact HR immediately.
+                            </p>
+                        </div>
+                        
+                        <div style="background: #F0FDF4; padding: 14px; border-radius: 10px; margin-bottom: 24px; border-left: 4px solid #10B981;">
+                            <p style="margin: 0; font-size: 14px; color: #059669;">
+                                ✅ For security reasons, please keep your password confidential.
+                            </p>
+                        </div>
+                        
+                        <hr style="border: none; border-top: 1px solid #E4E8F5; margin: 20px 0;">
+                        
+                        <p style="font-size: 12px; color: #94A3B8; text-align: center; margin: 0;">
+                            This is an automated message from HRMS. Please do not reply to this email.
+                        </p>
+                    </div>
+                </div>
+            `
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log(`Password change notification email sent to ${user.email}`);
+    return true;
+  } catch (error) {
+    console.error("Error sending password change email:", error);
+    return false;
+  }
+};
+
+module.exports = { sendWelcomeEmail, sendPasswordResetNotification ,sendPasswordChangeNotification   };

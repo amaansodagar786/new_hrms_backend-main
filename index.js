@@ -51,6 +51,7 @@ const hrDashboardRoutes = require("./routes/dashbaord/hrDashboardRoutes");
 const managerDashboardRoutes = require("./routes/dashbaord/managerDashboardRoutes");
 const employeeDashboardRoutes = require("./routes/dashbaord/employeeDashboardRoutes");
 const payslipRoutes = require("./routes/salary/payslip");
+const adminReportsRoutes = require("./routes/admin/adminReports");
 
 
 
@@ -73,6 +74,8 @@ app.use("/admin/dashboard", adminDashboardRoutes);
 app.use("/hr/dashboard", hrDashboardRoutes);
 app.use("/manager/dashboard", managerDashboardRoutes);
 app.use("/employee/dashboard", employeeDashboardRoutes);
+app.use("/admin/reports", adminReportsRoutes);
+
 
 
 
