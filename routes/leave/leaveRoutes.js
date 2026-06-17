@@ -511,10 +511,27 @@ router.get("/all-requests", async (req, res) => {
             });
         }
 
-        const { status, limit = 20, page = 1 } = req.query;
+        const { status, month, year, limit = 20, page = 1 } = req.query;
 
         let filter = {};
+
+        // Status filter
         if (status) filter.status = status;
+
+        // Month/Year filter (FIXED)
+        if (month && year) {
+            const monthStr = String(month).padStart(2, '0');
+            const yearStr = String(year);
+
+            // Use $and to combine with status filter
+            filter = {
+                ...filter,
+                $or: [
+                    { fromDate: { $regex: `^${yearStr}-${monthStr}` } },
+                    { toDate: { $regex: `^${yearStr}-${monthStr}` } }
+                ]
+            };
+        }
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
