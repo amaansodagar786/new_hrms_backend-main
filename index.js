@@ -25,6 +25,7 @@ app.use(
         origin: [
             "http://localhost:5173",
             "https://hrms-system-teal.vercel.app",
+            "https://hrms.techorses.com",
 
         ],
         credentials: true,
