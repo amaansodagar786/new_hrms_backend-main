@@ -5,7 +5,7 @@ const ReviewSchema = new mongoose.Schema({
     performanceId: {
         type: String,
         required: true,
-        unique: true,
+        
     },
     reviewMonth: {
         type: String, // Format: "2024-06"

@@ -3,6 +3,7 @@ const Salary = require("../../models/Salary/Salary");
 const User = require("../../models/User");
 const Policy = require("../../models/Policy");
 const { calculateSalary } = require("../../utils/salaryCalculator");
+const { sendSalaryPaidEmail } = require("../../utils/salaryEmailService");
 
 const router = express.Router();
 
@@ -332,6 +333,7 @@ router.post("/calculate/:employeeId/:year/:month", async (req, res) => {
   }
 });
 
+
 // ========== MARK SALARY AS PAID ==========
 router.put("/:employeeId/:year/:month/mark-paid", async (req, res) => {
   try {
@@ -392,6 +394,11 @@ router.put("/:employeeId/:year/:month/mark-paid", async (req, res) => {
       });
     }
 
+    // Store employee info BEFORE updating
+    const employeeName = salaryDoc.employeeName;
+    const netSalary = salaryDoc.records[recordIndex].netSalary || 0;
+
+    // Update salary record
     salaryDoc.records[recordIndex].status = "PAID";
     salaryDoc.records[recordIndex].paidAt = new Date();
     salaryDoc.records[recordIndex].paidBy = userId;
@@ -399,9 +406,26 @@ router.put("/:employeeId/:year/:month/mark-paid", async (req, res) => {
 
     await salaryDoc.save();
 
+    // ========== SEND EMAIL ==========
+    try {
+      await sendSalaryPaidEmail(
+        employeeId,
+        employeeName,
+        targetMonth,
+        targetYear,
+        netSalary,
+        userId,
+        userName
+      );
+      console.log(`📧 Salary paid email sent to ${employeeId} for ${getMonthName(targetMonth)} ${targetYear}`);
+    } catch (emailError) {
+      // Don't fail the request if email fails, just log it
+      console.error("❌ Failed to send salary email:", emailError);
+    }
+
     res.json({
       success: true,
-      message: `Salary for ${getMonthName(targetMonth)} ${targetYear} marked as paid successfully`,
+      message: `Salary for ${getMonthName(targetMonth)} ${targetYear} marked as paid successfully. Email notification sent.`,
       record: salaryDoc.records[recordIndex],
     });
   } catch (error) {

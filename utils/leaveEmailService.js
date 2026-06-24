@@ -10,7 +10,7 @@ const transporter = nodemailer.createTransport({
 });
 
 // Send leave status notification email
-const sendLeaveStatusEmail = async (leave, status, approvedBy, rejectionReason = null) => {
+const sendLeaveStatusEmail = async (leave, status, approvedBy, rejectionReason = null, isOverride = false, previousStatus = null) => {
   const employeeEmail = leave.employeeEmail || (await getUserEmail(leave.employeeId));
   if (!employeeEmail) {
     console.log(`No email found for employee: ${leave.employeeId}`);
@@ -29,6 +29,19 @@ const sendLeaveStatusEmail = async (leave, status, approvedBy, rejectionReason =
     .map(sum => `${sum.leaveType}: ${sum.daysCount} day(s)`)
     .join(", ");
 
+  // Build override message if applicable
+  let overrideMessage = "";
+  if (isOverride && previousStatus) {
+    overrideMessage = `
+      <div style="background: #FEF3C7; padding: 15px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #F59E0B;">
+        <p style="margin: 0; color: #92400E; font-weight: 600;">🔔 ADMIN OVERRIDE</p>
+        <p style="margin: 5px 0 0 0; color: #78350F;">
+          This request was previously <strong>${previousStatus}</strong> and has been overridden by Admin to <strong>${status}</strong>.
+        </p>
+      </div>
+    `;
+  }
+
   const emailTemplate = `
     <!DOCTYPE html>
     <html>
@@ -42,16 +55,25 @@ const sendLeaveStatusEmail = async (leave, status, approvedBy, rejectionReason =
         .detail-item { margin: 8px 0; }
         .label { font-weight: bold; color: #4F46E5; }
         .footer { text-align: center; padding: 15px; font-size: 12px; color: #666; border-top: 1px solid #ddd; }
+        .override-badge { background: #F59E0B; color: white; padding: 4px 12px; border-radius: 20px; font-size: 12px; }
       </style>
     </head>
     <body>
       <div class="container">
         <div class="header">
           <h2>Leave Request ${statusText}</h2>
+          ${isOverride ? '<span class="override-badge">⚠️ Override</span>' : ''}
         </div>
         <div class="content">
           <p>Dear <strong>${leave.employeeName}</strong>,</p>
-          <p>Your leave request has been <strong style="color: ${statusColor}">${status}</strong>.</p>
+          
+          ${isOverride ? `
+            <p>Your leave request has been <strong style="color: #F59E0B;">OVERRIDDEN</strong> by Admin.</p>
+          ` : `
+            <p>Your leave request has been <strong style="color: ${statusColor}">${status}</strong>.</p>
+          `}
+          
+          ${overrideMessage}
           
           <div class="details">
             <h3>Leave Details:</h3>
@@ -78,6 +100,14 @@ const sendLeaveStatusEmail = async (leave, status, approvedBy, rejectionReason =
             <div class="detail-item">
               <span class="label">Reviewed On:</span> ${new Date().toLocaleString()}
             </div>
+            ${isOverride && previousStatus ? `
+            <div class="detail-item">
+              <span class="label">Previous Status:</span> ${previousStatus}
+            </div>
+            <div class="detail-item">
+              <span class="label">New Status:</span> ${status}
+            </div>
+            ` : ''}
           </div>
           
           ${status === "APPROVED" ? `
@@ -85,6 +115,12 @@ const sendLeaveStatusEmail = async (leave, status, approvedBy, rejectionReason =
           ` : `
             <p>Your leave request has been rejected. Please contact your manager for more details.</p>
           `}
+          
+          ${isOverride ? `
+            <p style="color: #92400E; background: #FEF3C7; padding: 10px; border-radius: 6px;">
+              <strong>Note:</strong> This is an admin override action. Please contact HR/Admin if you have any questions.
+            </p>
+          ` : ''}
         </div>
         <div class="footer">
           <p>This is an automated email. Please do not reply.</p>
@@ -98,13 +134,15 @@ const sendLeaveStatusEmail = async (leave, status, approvedBy, rejectionReason =
   const mailOptions = {
     from: `"HRMS System" <${process.env.EMAIL_USER}>`,
     to: employeeEmail,
-    subject: `Leave Request ${status} - ${fromDate} to ${toDate}`,
+    subject: isOverride
+      ? `[OVERRIDE] Leave Request ${status} - ${fromDate} to ${toDate}`
+      : `Leave Request ${status} - ${fromDate} to ${toDate}`,
     html: emailTemplate,
   };
 
   try {
     await transporter.sendMail(mailOptions);
-    console.log(`Leave status email sent to ${employeeEmail}`);
+    console.log(`Leave status email sent to ${employeeEmail}${isOverride ? ' (OVERRIDE)' : ''}`);
     return true;
   } catch (error) {
     console.error("Email sending failed:", error);

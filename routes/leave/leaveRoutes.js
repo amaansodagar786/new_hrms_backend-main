@@ -583,11 +583,17 @@ router.put("/:id/approve", async (req, res) => {
             });
         }
 
-        if (leave.status !== "PENDING") {
-            return res.status(400).json({
-                success: false,
-                message: `Leave request is already ${leave.status.toLowerCase()}`,
-            });
+        // ✅ ADMIN can override - skip status check for ADMIN
+        if (approverRole !== "ADMIN") {
+            if (leave.status !== "PENDING") {
+                return res.status(400).json({
+                    success: false,
+                    message: `Leave request is already ${leave.status.toLowerCase()}`,
+                });
+            }
+        } else {
+            // For Admin override, log that override is happening
+            console.log(`🔄 Admin override: ${leave.status} → APPROVED`);
         }
 
         const requiredApproverRole = getApproverRole(leave.role);
@@ -625,7 +631,14 @@ router.put("/:id/approve", async (req, res) => {
             });
         }
 
-        await updateLeaveBalance(leave.employeeId, leave.leaveTypeSummary, false);
+        // ✅ Update leave balance only if it was PENDING (not for override)
+        if (leave.status === "PENDING") {
+            await updateLeaveBalance(leave.employeeId, leave.leaveTypeSummary, false);
+        }
+
+        // Store previous status for logging
+        const previousStatus = leave.status;
+        const isOverride = previousStatus !== "PENDING";
 
         leave.status = "APPROVED";
         leave.approvedBy = approverId;
@@ -634,19 +647,34 @@ router.put("/:id/approve", async (req, res) => {
         leave.approvedAt = new Date();
         await leave.save();
 
+        // ========== SEND EMAIL FOR BOTH CASES ==========
         const employeeEmail = await getUserEmail(leave.employeeId);
         if (employeeEmail) {
-            await sendLeaveStatusEmail(leave, "APPROVED", approverName);
+            await sendLeaveStatusEmail(
+                leave,
+                "APPROVED",
+                approverName,
+                null,
+                isOverride,
+                isOverride ? previousStatus : null
+            );
+        }
+
+        if (isOverride) {
+            console.log(`🔄 Admin override: ${previousStatus} → APPROVED for ${leave.employeeName}`);
         }
 
         res.json({
             success: true,
-            message: "Leave approved successfully",
+            message: previousStatus === "PENDING"
+                ? "Leave approved successfully"
+                : `Leave overridden to APPROVED (was ${previousStatus})`,
             leave: {
                 id: leave._id,
                 status: leave.status,
                 approvedBy: leave.approvedByName,
                 approvedAt: leave.approvedAt,
+                wasOverride: isOverride
             },
         });
     } catch (error) {
@@ -687,11 +715,17 @@ router.put("/:id/reject", async (req, res) => {
             });
         }
 
-        if (leave.status !== "PENDING") {
-            return res.status(400).json({
-                success: false,
-                message: `Leave request is already ${leave.status.toLowerCase()}`,
-            });
+        // ✅ ADMIN can override - skip status check for ADMIN
+        if (approverRole !== "ADMIN") {
+            if (leave.status !== "PENDING") {
+                return res.status(400).json({
+                    success: false,
+                    message: `Leave request is already ${leave.status.toLowerCase()}`,
+                });
+            }
+        } else {
+            // For Admin override, log that override is happening
+            console.log(`🔄 Admin override: ${leave.status} → REJECTED`);
         }
 
         const requiredApproverRole = getApproverRole(leave.role);
@@ -729,6 +763,16 @@ router.put("/:id/reject", async (req, res) => {
             });
         }
 
+        // ✅ Update leave balance only if it was PENDING or APPROVED (restore balance)
+        if (leave.status === "APPROVED") {
+            // If overriding an approved leave, restore the balance
+            await updateLeaveBalance(leave.employeeId, leave.leaveTypeSummary, true);
+        }
+
+        // Store previous status for logging
+        const previousStatus = leave.status;
+        const isOverride = previousStatus !== "PENDING";
+
         leave.status = "REJECTED";
         leave.rejectionReason = rejectionReason;
         leave.approvedBy = approverId;
@@ -737,18 +781,33 @@ router.put("/:id/reject", async (req, res) => {
         leave.approvedAt = new Date();
         await leave.save();
 
+        // ========== SEND EMAIL FOR BOTH CASES ==========
         const employeeEmail = await getUserEmail(leave.employeeId);
         if (employeeEmail) {
-            await sendLeaveStatusEmail(leave, "REJECTED", approverName, rejectionReason);
+            await sendLeaveStatusEmail(
+                leave,
+                "REJECTED",
+                approverName,
+                rejectionReason,
+                isOverride,
+                isOverride ? previousStatus : null
+            );
+        }
+
+        if (isOverride) {
+            console.log(`🔄 Admin override: ${previousStatus} → REJECTED for ${leave.employeeName}`);
         }
 
         res.json({
             success: true,
-            message: "Leave rejected",
+            message: previousStatus === "PENDING"
+                ? "Leave rejected"
+                : `Leave overridden to REJECTED (was ${previousStatus})`,
             leave: {
                 id: leave._id,
                 status: leave.status,
                 rejectionReason: leave.rejectionReason,
+                wasOverride: isOverride
             },
         });
     } catch (error) {
